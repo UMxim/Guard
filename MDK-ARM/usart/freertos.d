@@ -1,0 +1,13 @@
+usart\freertos.o: ../Src/freertos.c
+usart\freertos.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/FreeRTOS.h
+usart\freertos.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\stddef.h
+usart\freertos.o: C:\Keil_v5\ARM\ARMCC\Bin\..\include\stdint.h
+usart\freertos.o: ../Inc/FreeRTOSConfig.h
+usart\freertos.o: ../Inc/main.h
+usart\freertos.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/projdefs.h
+usart\freertos.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/portable.h
+usart\freertos.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/deprecated_definitions.h
+usart\freertos.o: ../Middlewares/Third_Party/FreeRTOS/Source/portable/RVDS/ARM_CM0/portmacro.h
+usart\freertos.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/mpu_wrappers.h
+usart\freertos.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/task.h
+usart\freertos.o: ../Middlewares/Third_Party/FreeRTOS/Source/include/list.h
