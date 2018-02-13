@@ -6,6 +6,7 @@
 extern UART_HandleTypeDef huart2;
 extern osMessageQId toSMSHandle;
 char RxBuffer[200];
+uint8_t ID=0;
 
 //------------------------------------------------------------------------
 uint8_t RecieveData (void)
@@ -16,10 +17,9 @@ uint8_t RecieveData (void)
 	if (xQueuePeek(toSMSHandle,&recieve_word,0)==pdPASS)
 		while (xQueueReceive(toSMSHandle,&recieve_word,10)==pdPASS) 
 		{
-			uint8_t ID=( recieve_word>>8);
+			ID=( recieve_word>>8);
 			uint8_t DATA= (uint8_t) (recieve_word&0xFF);
-		  if (ID==1) RxBuffer[RxCounter++]=DATA ;
-			
+		  if (ID==1) RxBuffer[RxCounter++]=DATA ;			
 		};
 	RxBuffer[RxCounter]=0;
 	
@@ -98,6 +98,17 @@ void MonitoringRing(void)
 {
 	if (RecieveData()!=0) 
 		if ((strstr(RxBuffer,"RING")!=NULL)&(strstr(RxBuffer,admin_number)!=NULL)) HAL_GPIO_WritePin(LD4_GPIO_Port, LD4_Pin,1);
+	switch (ID)
+	{
+		case 2:			//позвонить админу
+			Call(admin_number,15000);
+			ID=0;
+			break;
+		case 3:				//отправить смс
+			ID=0;
+			break;
+	};
+	
 };
 
 

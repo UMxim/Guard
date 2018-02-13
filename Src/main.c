@@ -75,7 +75,7 @@ osSemaphoreId toTickHandle;
 	uint8_t state =0;
 	uint32_t sensors = 1;																							// переменная, полученая из модуля sensors. содержит биты состояний и значение температуры двигателя
 	uint32_t sensors_mask = 0xFFFFFFFF;															  // mask for off some sensors
-	uint16_t to_sensor_module = 0x8000;																			// переменная для передачи команд в задачу sensors
+	uint16_t to_sensor_module = 0x8000;																// переменная для передачи команд в задачу sensors
 	uint8_t counter_of_alarm=0;																				// счетчик количества срабатываний
 	uint8_t counter_of_starts=0;																			// счетчик количества попыток старта двигателя
 	uint32_t timer_Guard_But_Door;																		// время ожидания закрытия двери
@@ -386,26 +386,6 @@ void Task_Main(void const * argument)
 	uint8_t GLOBAL_counter_of_alarm=3;
 	uint8_t GLOBAL_in_temperature=100;
   
-	//temp
-	
-	
-	
-	
- // uint8_t state = 0; 																								// переменная состояния
-/*	uint32_t sensors = 1;																							// переменная, полученая из модуля sensors. содержит биты состояний и значение температуры двигателя
-	uint32_t sensors_mask = 0xFFFFFFFF;															  // mask for off some sensors
-	uint16_t to_sensor_module = 0;																			// переменная для передачи команд в задачу sensors
-	uint8_t counter_of_alarm=0;																				// счетчик количества срабатываний
-	uint8_t counter_of_starts=0;																			// счетчик количества попыток старта двигателя
-	uint32_t timer_Guard_But_Door;																		// время ожидания закрытия двери
-	uint32_t timer_Open_But_Door;																			// время ожидания открытия двери
-	uint32_t timer_of_alarm;																					// время сколько орать
-	uint32_t timer_time_of_start_engine;															// время работы стартера
-	uint32_t timer_of_start_engine_rest;															// время отдыха после стартера
-	uint32_t timer_of_engine_work;
-	uint8_t flag_autostart_allowed=0;																	// разрешен ли автозапуск
-	uint32_t delay=0;																									// переменная для задержки. после отправки команд в задачу sensors ее используем
-*/	
 	#define pick(times) for (uint8_t i=0; i<times; i++) xSemaphoreGive( toTickHandle)
 	
 	#define IN_button_close					 	(sensors & 0x80000000)					// старший бит 
@@ -441,11 +421,13 @@ void Task_Main(void const * argument)
 	#define state_autostart_ready 			5
 	#define state_autostart_startengine 6
 	#define state_autostart_work 				7
+	
 							
 	/* Infinite loop */
   for(;;)
   {
-	/*?????*/  sensors &= sensors_mask; 																					// выключили некоторые сенсоры по маске	
+		
+	sensors &= sensors_mask; 																					// выключили некоторые сенсоры по маске	
 		
 	switch (state)
     {	
@@ -485,7 +467,9 @@ void Task_Main(void const * argument)
 						state = state_openButDoor;}; //прыгаем в состояние open_butDoor
 				if ((IN_door_open!=0)|(IN_shock_hi!=0)|(IN_eng!=0))
 					{	counter_of_alarm++;
-						timer_of_alarm=GLOBAL_timer_of_alarm ;  
+						timer_of_alarm=GLOBAL_timer_of_alarm ; 
+						recieve_word=0x0200;
+						xQueueSend(toSMSHandle,& recieve_word, 0);
 						state=state_alarm ;
 					};//  дверь ОТКРЫТА или зажигание==1 или ударHI==1, то счетчик срабатывания ++, timealarm=время для ора и в состояние Alarm
 				if (IN_shock_low!=0) pick(4);//	 ударLOW==1 то пикпикх4
