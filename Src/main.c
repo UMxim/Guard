@@ -52,7 +52,6 @@
 #include "cmsis_os.h"
 
 /* USER CODE BEGIN Includes */
-//#include "string.h"
 #include "sms.h"
 /* USER CODE END Includes */
 
@@ -72,24 +71,31 @@ osSemaphoreId toTickHandle;
 
 /* USER CODE BEGIN PV */
 /* Private variables ---------------------------------------------------------*/
-	uint8_t state =0;
-	uint32_t sensors = 1;																							// переменная, полученая из модуля sensors. содержит биты состояний и значение температуры двигателя
-	uint32_t sensors_mask = 0xFFFFFFFF;															  // mask for off some sensors
-	uint16_t to_sensor_module = 0x8000;																// переменная для передачи команд в задачу sensors
-	uint8_t counter_of_alarm=0;																				// счетчик количества срабатываний
-	uint8_t counter_of_starts=0;																			// счетчик количества попыток старта двигателя
-	uint32_t timer_Guard_But_Door;																		// время ожидания закрытия двери
-	uint32_t timer_Open_But_Door;																			// время ожидания открытия двери
-	uint32_t timer_of_alarm;																					// время сколько орать
-	uint32_t timer_time_of_start_engine;															// время работы стартера
-	uint32_t timer_of_start_engine_rest;															// время отдыха после стартера
-	uint32_t timer_of_engine_work;
-	uint8_t flag_autostart_allowed=0;																	// разрешен ли автозапуск
-	uint32_t delay=0;																									// переменная для задержки. после отправки команд в задачу sensors ее используем
+
 //sms variable
-	uint16_t recieve_word;																						//переменная для помещения в очередь смс
+	uint16_t recieveWord;																						//переменная для помещения в очередь смс
 	uint8_t RxByte; 																									// буфер для приема 
 	char admin_number[]="9091286400";
+// define command to sensor module	
+	#define dOutDoorToClose					1				
+	#define dOutDoorToOpen					2				
+	#define dOutGlassToClose				3
+	#define dOutButtonToClose				4			
+	#define dOutButtonToOpen				5		
+	#define dOutEngMainToOn					6			
+	#define dOutEngMainToOff				7		
+	#define dOutEngAdditionalToOn		8			
+	#define dOutEngAdditionalToOff	9			
+	#define dOutStarterToOn					10			
+	#define dOutStarterToOff				11	
+	#define dOutUpdateSensors				12
+// define number to sms
+	#define dSmsDoorOpen						0x0200
+	#define dSmsShockHi							0x0300
+	#define dSmsShockLow						0x0400
+	#define dSmsEngOn								0x0500
+	#define dSmsDoorNotClose				0x0600
+	#define dSmsCantStartEngine			0x0700
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -362,9 +368,9 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
-	recieve_word=RxByte+0x100;
+	recieveWord=RxByte+0x100;
 	portBASE_TYPE * pxHigherPriorityTaskWoken;
-	xQueueSendFromISR(toSMSHandle, &recieve_word, pxHigherPriorityTaskWoken);
+	xQueueSendFromISR(toSMSHandle, &recieveWord, pxHigherPriorityTaskWoken);
 	HAL_UART_Receive_IT(&huart2,&RxByte,1);
 };
 /* USER CODE END 4 */
@@ -374,191 +380,295 @@ void Task_Main(void const * argument)
 {
 
   /* USER CODE BEGIN 5 */
+	uint8_t state =0;
+	uint32_t sensors = 1;																							// переменная, полученая из модуля sensors. содержит биты состояний и значение температуры двигателя
+	uint32_t sensorsMask = 0xFFFFFFFF;															  // mask for off some sensors
+	
+	uint8_t counterOfAlarm=0;																				// счетчик количества срабатываний
+	uint8_t counterOfStarts=0;																			// счетчик количества попыток старта двигателя
+	
+	uint32_t timerGuardButDoor;																		// время ожидания закрытия двери
+	uint32_t timerOpenButDoor;																			// время ожидания открытия двери
+	uint32_t timerOfAlarm;																					// время сколько орать
+	uint32_t timerOfStartEngine;															// время работы стартера
+	uint32_t timerOfStartEngineRest;															// время отдыха после стартера
+	uint32_t timerOfEngineWork;
+	
+	uint8_t flagAutostartAllowed=0;																	// разрешен ли автозапуск
+	
 	//temp
-	uint32_t GLOBAL_timer_Guard_But_Door=60000; //1мин
-	uint32_t GLOBAL_timer_Open_But_Door=60000; //1мин
-	uint32_t GLOBAL_timer_of_alarm = 120000;
-	uint32_t GLOBAL_timer_of_engine_work=300000;
-	uint8_t GLOBAL_flag_autostart_allowed=1;
-	uint32_t GLOBAL_time_of_start_engine=10000;//10sec 
-	uint32_t  GLOBAL_time_of_start_engine_rest=30000;//30sec
-	uint8_t GLOBAL_max_of_try_start=3;
-	uint8_t GLOBAL_counter_of_alarm=3;
-	uint8_t GLOBAL_in_temperature=100;
-  
-	#define pick(times) for (uint8_t i=0; i<times; i++) xSemaphoreGive( toTickHandle)
+	uint32_t	globalTimerGuardButDoor=60000; //1мин
+	uint32_t 	globalTimerOpenButDoor=60000; //1мин
+	uint32_t  globalTimerOfAlarm = 120000;
+	uint32_t  globalTimerOfEngineWork=300000;
+	uint8_t	  globalFlagAutostartAllowed=1;
+	uint32_t  globalTimeOfStartEngine=10000;//10sec 
+	uint32_t	globalTimeOfStartEngineRest=30000;//30sec
+	uint8_t	  globalMaxOfTryStart=3;
+	uint8_t 	globalCounterOfAlarm=3;
+	uint8_t   globalInTemperature=100;
+		
+	#define dPick(times)  for (uint8_t i=0; i<times; i++) xSemaphoreGive( toTickHandle) ;
+	#define dSendCommand(command) { uint8_t temp=command;  xQueueSend( toSensorsHandle, &temp, portMAX_DELAY) ;};// отправляем команды в задачу  sensors)
+	#define dSendSms(command)		{ uint16_t temp=command;  xQueueSend(toSMSHandle,&temp, 1);};
 	
-	#define IN_button_close					 	(sensors & 0x80000000)					// старший бит 
-	#define IN_door_open 							(sensors & 0x40000000)
-	#define IN_eng										(sensors & 0x20000000)
-	#define IN_headlights							(sensors & 0x10000000)
-	#define IN_flag_autostart_allowed	(sensors & 0x08000000)
-	#define IN_handbrake							(sensors & 0x04000000)
-	#define IN_engine_work 						(sensors & 0x02000000)
-	#define IN_shock_hi								(sensors & 0x01000000)
-	#define IN_shock_low							(sensors & 0x00800000)
-	#define IN_begin_autostart				(sensors & 0x00400000)
-	#define IN_backdoor_open					(sensors & 0x00200000)
-	#define IN_temperature						(sensors & 0x000000FF)					// 1 байт для значения температуры
+// разложение переменной, полученной из sensors на биты состояний
+	#define dIsButtonClose					 	(sensors & 0x80000000)					// старший бит 
+	#define dIsDoorOpen 							(sensors & 0x40000000)
+	#define dIsEngOn									(sensors & 0x20000000)
+	#define dIsHeadlightsOn						(sensors & 0x10000000)
+	#define dIsFlagAutostartAllowed		(sensors & 0x08000000)
+	#define dIsHandbrakeOn						(sensors & 0x04000000)
+	#define dIsEngineWork 						(sensors & 0x02000000)
+	#define dIsShockHi								(sensors & 0x01000000)
+	#define dIsShockLow								(sensors & 0x00800000)
+	#define dIsBeginAutostart					(sensors & 0x00400000)
+	#define dIsBackdoorOpen						(sensors & 0x00200000)
+	#define dInTemperature						(sensors & 0x000000FF)					// 1 байт для значения температуры
 	
-	#define OUT_door_to_close					(to_sensor_module|=0x0001)				//закрыть двери
-	#define OUT_door_to_open					(to_sensor_module|=0x0002)				//
-	#define OUT_glass_to_close				(to_sensor_module|=0x0004)				//закрыть стекло
-	#define OUT_button_close					(to_sensor_module|=0x0008)				//перевести кнопку в значение "закрыто"
-	#define OUT_button_open						(to_sensor_module|=0x0010)			//перевести кнопку в значение "открыто"
-	#define OUT_eng_main_on						(to_sensor_module|=0x0020)				//
-	#define OUT_eng_main_off					(to_sensor_module|=0x0040)				//
-	#define OUT_eng_additional_on			(to_sensor_module|=0x0080)				//
-	#define OUT_eng_additional_off		(to_sensor_module|=0x0100)				//
-	#define OUT_starter_on						(to_sensor_module|=0x0200)				//
-	#define OUT_starter_off						(to_sensor_module|=0x0400)				//
+	#define dStateOpen 									0
+	#define dStateGuard 								1
+	#define dStateAlarm 								2
+	#define dStateGuardButDoorOpen			3
+	#define dStateOpenButDoorClose	 		4
+	#define dStateAutostartReady	 			5
+	#define dStateAutostartStartEngine	6
+	#define dStateAutostartWork 				7
 	
-	#define state_open 									0
-	#define state_guard 								1
-	#define state_alarm 								2
-	#define state_guardButDoor 					3
-	#define state_openButDoor 					4
-	#define state_autostart_ready 			5
-	#define state_autostart_startengine 6
-	#define state_autostart_work 				7
 	
 							
 	/* Infinite loop */
   for(;;)
   {
-		
-	sensors &= sensors_mask; 																					// выключили некоторые сенсоры по маске	
-		
+	
+	dSendCommand(dOutUpdateSensors);
+	xQueueReceive( toMainHandle, &sensors,portMAX_DELAY);  				  //see queue for update sensors value				
+	sensors &= sensorsMask; 																					// выключили некоторые сенсоры по маске	
+	
 	switch (state)
     {	
-			case state_open:// состояние open 
-				sensors_mask=0xFFFFFFFF;																		//если была сработка и поставлена маска не смотреть дверь, от ее здесь надо обнулить
-				if ((IN_button_close>0)&(IN_door_open==0)&(IN_eng==0))			//  нажали на кнопку закрыть. если кнопк==1, дверь закрыта, зажигания нет, 
+			case dStateOpen	:																																											// состояние open 
+				sensorsMask=0xFFFFFFFF;																			//если была сработка и поставлена маска не смотреть дверь, от ее здесь надо обнулить
+				if ( (dIsButtonClose!=0) & (dIsDoorOpen==0) & (dIsEngOn==0) )																				//  нажали на кнопку закрыть. если кнопк==1, дверь закрыта, зажигания нет, 
 					{	
-						if (IN_headlights==0) pick(1); else pick(3);			 		// 	если фары (пикаем разик) иначе (пикаем 3, отправляем смс?)
-						OUT_door_to_close;
-						OUT_glass_to_close;					//	двери на закрытие,стекло закрыть,
-						delay=300; 
-					state=state_guard;
+						if (dIsHeadlightsOn!=0) dPick(3);			 																											// 	пока горят фары пикаем
+						dPick(1);
+						dSendCommand(dOutDoorToClose);
+						dSendCommand(dOutGlassToClose);				
+						osDelay(300); 
+						state=dStateGuard;
 					};												//	ждем 0,3 сек и прыгаем в состояние guard							
-				if ((IN_button_close!=0)&(IN_door_open!=0)&(IN_eng==0))	//  нажали кнопку закрыть. кнопк==1, дверь ОТКРЫТА, зажигания нет.
-					{	if (IN_headlights!=0) pick(3);												//	если фары==1 то (пикаем 3,смс,) 
-						OUT_glass_to_close; 
-						delay=300;
-						timer_Guard_But_Door = GLOBAL_timer_Guard_But_Door;//2min			//	закрываем окно ждем 0.3 и в состояние Guard?BUtDoor, таймер guardButDoor=2мин
-						delay=300;
-						state=state_guardButDoor; };
-				if ((IN_button_close!=0)&(IN_eng!=0))									//  кнопк==1, зажигание есть, то ошибка -
-					{	pick(4);
-					OUT_button_open;	};												//	пикаем 4, состояние не меняем, состояние кнопки изменить на 0 и в sensors module его
-				if ((GLOBAL_flag_autostart_allowed!=0)&(IN_handbrake!=0)&(IN_engine_work!=0))//  если вобще он разрешен, то смотрим  ручник==1, заведен==1, то
-					{ OUT_eng_main_on;
-					OUT_eng_additional_on;
-					state=state_autostart_ready; };// включаем зажигание_оут=1 и зажигание_оут_доп=1 и в состояние AutoStartReady
-				counter_of_alarm=0;					//счетчик срабатывания = 0
+					
+				if ( (dIsButtonClose!=0) & (dIsDoorOpen!=0) & (dIsEngOn==0))	//  нажали кнопку закрыть. кнопк==1, дверь ОТКРЫТА, зажигания нет.
+					{	if (dIsHeadlightsOn!=0) dPick(3);												//	если фары==1 то (пикаем 3,смс,) 
+						dSendCommand(dOutGlassToClose);  
+						osDelay(300);
+						timerGuardButDoor = globalTimerGuardButDoor;//2min			//	закрываем окно ждем 0.3 и в состояние Guard?BUtDoor, таймер guardButDoor=2мин
+						state=dStateGuardButDoorOpen ; 
+					};
+					
+				if ( (dIsButtonClose!=0) & (dIsEngOn!=0) )									//  кнопк==1, зажигание есть, то ошибка -
+					{	dPick(4);
+						dSendCommand(dOutButtonToOpen);
+					};												//	пикаем 4, состояние не меняем, состояние кнопки изменить на 0 и в sensors module его
+					
+				if ( (globalFlagAutostartAllowed!=0) & (dIsHandbrakeOn!=0) & (dIsEngOn!=0))//  если вобще он разрешен, то смотрим  ручник==1, заведен==1, то
+					{ 
+						dSendCommand(dOutEngMainToOn);
+						dSendCommand(dOutEngAdditionalToOn);
+						state=dStateAutostartReady;
+					};// включаем зажигание_оут=1 и зажигание_оут_доп=1 и в состояние AutoStartReady
+					
+				counterOfAlarm = 0;					//счетчик срабатывания = 0
 				break;
 					
-    	case state_guard:// состояние guard
-				if (IN_button_close==0) //  кнопка==0,
-					{	pick(2);
-						OUT_door_to_open;
-						delay=300;
-						timer_Open_But_Door = GLOBAL_timer_Open_But_Door;//1min;//пикаем 2, двери на открытие, ждем 0,3 сек и , таймер openButDoor=Хмин
-						state = state_openButDoor;}; //прыгаем в состояние open_butDoor
-				if ((IN_door_open!=0)|(IN_shock_hi!=0)|(IN_eng!=0))
-					{	counter_of_alarm++;
-						timer_of_alarm=GLOBAL_timer_of_alarm ; 
-						recieve_word=0x0200;
-						xQueueSend(toSMSHandle,& recieve_word, 0);
-						state=state_alarm ;
+    	case dStateGuard:// состояние guard
+				if ( dIsButtonClose == 0 ) //  кнопка==0,
+					{	dPick(2);
+						dSendCommand(dOutDoorToClose);
+						osDelay(300);
+						timerOpenButDoor = globalTimerOpenButDoor;//1min;//пикаем 2, двери на открытие, ждем 0,3 сек и , таймер openButDoor=Хмин
+						state = dStateOpenButDoorClose;
+					}; //прыгаем в состояние open_butDoor
+					
+				if ( (dIsDoorOpen!=0) | (dIsShockHi!=0) | (dIsEngOn!=0) )
+					{	
+						counterOfAlarm++;
+						timerOfAlarm=globalTimerOfAlarm ; 
+						if (dIsDoorOpen!=0) dSendSms(dSmsDoorOpen);
+						if (dIsShockHi!=0)  dSendSms(dSmsShockHi);
+						if (dIsEngOn!=0)	  dSendSms(dSmsEngOn);
+						// start rec!!!!
+						state=dStateAlarm ;
 					};//  дверь ОТКРЫТА или зажигание==1 или ударHI==1, то счетчик срабатывания ++, timealarm=время для ора и в состояние Alarm
-				if (IN_shock_low!=0) pick(4);//	 ударLOW==1 то пикпикх4
-				if ((IN_begin_autostart!=0)&(flag_autostart_allowed!=0)) //  begin_autostart==1,смотрим разрешение на автозапуск(ставится из autostartready) ==1
-					{	OUT_eng_main_on;
-						timer_time_of_start_engine=GLOBAL_time_of_start_engine/*(10sek)*/; 
-						timer_of_start_engine_rest=GLOBAL_time_of_start_engine_rest/*(30sek)*/;	//, то зажигание_оут=1, таймер времени завода =10сек, таймер отдыха=30 сек
-						counter_of_starts=GLOBAL_max_of_try_start/*3raza*/;
-						delay=1000;
-						state=state_autostart_startengine;//кол-во попыток=3, ждем 1сек, переход в состояние autostart_startengine
+					
+				if (dIsShockLow!=0) 
+					{
+						dPick(4);//	 ударLOW==1 то пикпикх4
+						dSendSms(dSmsShockLow);
+					};
+					
+				if ( (dIsBeginAutostart!=0) & (flagAutostartAllowed!=0) ) //  begin_autostart==1,смотрим разрешение на автозапуск(ставится из autostartready) ==1
+					{	
+						dSendCommand(dOutEngMainToOn);
+						timerOfStartEngine=globalTimeOfStartEngine/*(10sek)*/; 
+						timerOfStartEngineRest=globalTimeOfStartEngineRest/*(30sek)*/;	//, то зажигание_оут=1, таймер времени завода =10сек, таймер отдыха=30 сек
+						counterOfStarts=globalMaxOfTryStart/*3raza*/;
+						osDelay(1000);
+						state=dStateAutostartStartEngine;//кол-во попыток=3, ждем 1сек, переход в состояние autostart_startengine
 					};
 				break;
 					
-			case state_alarm: // alarm. отсылаем каждый раз очередь в задачу alarmtask. пока счетчик не обнулится
+			case dStateAlarm: // alarm. отсылаем каждый раз очередь в задачу alarmtask. пока счетчик не обнулится
 				//пусть пищит по одному.пик-пик-пик. при сработке просто пики непрерывные. скорее всего ее вобще отключат чтоб не орал
-				if ((timer_of_alarm>0)&(counter_of_alarm<GLOBAL_counter_of_alarm/*3раз*/))// timeaalarm>0 и счетчик сработки менее порога, то
-					{	pick(1); timer_of_alarm--;	};	//кинуть в очередь в alarmtask еще одну еденичку для ора, timealarm--
-				if (timer_of_alarm==0) // если timealarm ==0; то
-					{	if (IN_door_open!=0) sensors_mask=0xBFDFFFFF;//если сюда пришли от двери( дверь==открыта) то в маску пишем не смотреть дверь
-						counter_of_alarm++;
-						state=state_guard;	};	// потом увеличиваем счетчик срабатывания++(обычно до трех) и переходим в состояние guard
-				if (IN_button_close==0) //кнопка==0,то
-					{  timer_Open_But_Door=GLOBAL_timer_Open_But_Door ;
-					state=state_openButDoor ; }; //таймер openButDoor=30сек, состояние open?butDoors.(при переходе в другое состояние двери не открываются!!!)
+				if ( (timerOfAlarm>0) & (counterOfAlarm<globalCounterOfAlarm/*3раз*/) )// timeaalarm>0 и счетчик сработки менее порога, то
+					{	
+						dPick(1); 
+						timerOfAlarm--;
+					};	//кинуть в очередь в alarmtask еще одну еденичку для ора, timealarm--
+					
+				if (timerOfAlarm==0) // если timealarm ==0; то
+					{
+						if (dIsDoorOpen!=0) sensorsMask=0xBFDFFFFF;//если сюда пришли от двери( дверь==открыта) то в маску пишем не смотреть дверь
+						counterOfAlarm++;
+						state=dStateGuard;
+					};	// потом увеличиваем счетчик срабатывания++(обычно до трех) и переходим в состояние guard
+					
+				if (dIsButtonClose==0) //кнопка==0,то
+					{
+						timerOpenButDoor=globalTimerOpenButDoor;
+						state=dStateOpenButDoorClose;
+					}; //таймер openButDoor=30сек, состояние open?butDoors.(при переходе в другое состояние двери не открываются!!!)
+					//управление с смс!!!!!!
 				break;
 					
 					
-			case state_guardButDoor:// состояние guard,butDoor 
-				if (timer_Guard_But_Door == 0)
-					{/*SMS(door)*/; pick(4);
-						timer_Guard_But_Door = INT32_MAX; // смс о незакрытой двери, пик 4, таймер=макс для неопределения его ниже.  таймер оттикал положенные минуты, надо предупредить пользователя о незакрытой двери
-						sensors_mask=0xBFDFFFFF;
-						state=state_guard;};// выключаем маской двери и в режим охраны
-				if (timer_Guard_But_Door < INT32_MAX) timer_Guard_But_Door--;    //таймер тикает или нет, одного предупреждения достаточно.
-				if ((IN_door_open==0) & (IN_eng==0))//  дверь закрыта,зажигания нет,
-					{	pick(1); OUT_door_to_close;delay=500;  state=state_guard; }; //пикаем разик, двери на закрытие, ждем 0,3 сек и прыгаем в состояние guard 
-					// надо либо сразу в очередь кидать или задержка бесполезна!!!!!!!
+			case dStateGuardButDoorOpen:// состояние guard,butDoor 
+				
+				if (timerGuardButDoor == 0)
+					{
+						/*SMS(door)*/; dPick(4);
+						dSendSms(dSmsDoorNotClose);
+						timerGuardButDoor = INT32_MAX; // смс о незакрытой двери, пик 4, таймер=макс для неопределения его ниже.  таймер оттикал положенные минуты, надо предупредить пользователя о незакрытой двери
+						sensorsMask=0xBFDFFFFF;
+						state=dStateGuard;
+					};// выключаем маской двери и в режим охраны
+					
+				if (timerGuardButDoor < INT32_MAX) timerGuardButDoor--;    //таймер тикает или нет, одного предупреждения достаточно.
+					
+				if ((dIsDoorOpen==0) & (dIsEngOn==0))//  дверь закрыта,зажигания нет,
+					{	
+						dPick(1); 
+						dSendCommand(dOutDoorToClose);
+						osDelay(500);
+						state=dStateGuard;
+					}; //пикаем разик, двери на закрытие, ждем 0,3 сек и прыгаем в состояние guard 
 					// дверь наконец- то закрыли. надо смотреть на зажигание, чтоб никто не сидел внутри, или ключ в заведенной машине не оставил 
-				if (IN_eng !=0 ) pick(1);//  зажигание==1,то пик1. //включили зажигание на подохранной машиной. надо попищать по одному пику пока не выключат зажигание
+				if (dIsEngOn !=0 ) dPick(1);//  зажигание==1,то пик1. //включили зажигание на подохранной машиной. надо попищать по одному пику пока не выключат зажигание
 				break;
 			
-			case state_openButDoor: // состояние openButDoor. нажали на открытие, но двери не открыли
-				if (IN_door_open!=0) state=state_open; //дверь открыта, переходим в состояние open
-				timer_Open_But_Door--; //тикаем таймером					
-				if (timer_Open_But_Door==0) {OUT_button_close; state=state_open; };//таймер дотикал до нуля, пикаем 1, отправить в модуль sensors значение кнопки =1 (виртуальная кнопка закрыто) и переходим в режим открыто- оттуда автоматом упадет в guard 
+			case dStateOpenButDoorClose: // состояние openButDoor. нажали на открытие, но двери не открыли
+				
+				if (dIsDoorOpen!=0) state=dStateOpen; //дверь открыта, переходим в состояние open
+			
+				timerOpenButDoor--; //тикаем таймером					
+				
+				if (timerOpenButDoor==0) 
+					{
+						dSendCommand(dOutButtonToClose);
+						osDelay(100);
+						state=dStateOpen; 
+					};//таймер дотикал до нуля, пикаем 1, отправить в модуль sensors значение кнопки =1 (виртуальная кнопка закрыто) и переходим в режим открыто- оттуда автоматом упадет в guard 
+					
 				break;
 			
-			case state_autostart_ready:// состояние autostartready
-				if (IN_handbrake==0) {OUT_eng_main_off; OUT_eng_additional_off; state=state_open;}; //если ручник отпустили, то зажигание_оут=0 и зажигание_оут_доп=0, и переходим обратно в open
-				if (IN_button_close!=0) { OUT_eng_main_off; OUT_eng_additional_off;// если нажали кнопку закрыть то зажигание_оут=0 и зажигание_оут_доп=0, 
-																	if (IN_door_open) flag_autostart_allowed=0; else flag_autostart_allowed=1; state=state_open; delay=10000;};//флаг разрешения автозапуска зависит от состояния двери(дверь открыта-нет флага) и прыгаем в open? оттудаавтоматом упадем в guard
+			case dStateAutostartReady:// состояние autostartready
+				
+				if (dIsHandbrakeOn==0) 
+					{
+						dSendCommand(dOutEngMainToOff);
+						dSendCommand(dOutEngAdditionalToOff);
+						state=dStateOpen;
+					}; //если ручник отпустили, то зажигание_оут=0 и зажигание_оут_доп=0, и переходим обратно в open
+					
+				if (dIsButtonClose!=0) 
+					{
+						dSendCommand(dOutEngMainToOff);
+						dSendCommand(dOutEngAdditionalToOff);// если нажали кнопку закрыть то зажигание_оут=0 и зажигание_оут_доп=0, 
+						if (dIsDoorOpen) flagAutostartAllowed=0; else flagAutostartAllowed=1;
+						state=dStateOpen;
+						osDelay(100);
+					};//флаг разрешения автозапуска зависит от состояния двери(дверь открыта-нет флага) и прыгаем в open? оттудаавтоматом упадем в guard
 				break;
 			
-			case 6:// состояние autostart_startengine
-				if (timer_time_of_start_engine>0) {OUT_starter_on; timer_time_of_start_engine--;};			//если таймер_времени_завода >0 то стартер=1, таймер--
-				if (timer_time_of_start_engine==0) {OUT_starter_off; timer_of_start_engine_rest--; };			//если таймер_времени_завода ==0 то стартер=0, таймер отдыха--
-				if ((timer_time_of_start_engine==0)&(timer_of_start_engine_rest==0))
-					{	counter_of_starts--;
-						timer_time_of_start_engine=GLOBAL_time_of_start_engine/*(10sek)*/; timer_of_start_engine_rest=GLOBAL_time_of_start_engine_rest/*(30sek)*/;	
+			case dStateAutostartStartEngine:// состояние autostart_startengine
+				
+				if (timerOfStartEngine>0) 
+					{
+						dSendCommand(dOutStarterToOn);
+						timerOfStartEngine--;
+					};			//если таймер_времени_завода >0 то стартер=1, таймер--
+					
+				if (timerOfStartEngine==0) 
+					{
+						dSendCommand(dOutStarterToOff); 
+						timerOfStartEngineRest--; 
+					};			//если таймер_времени_завода ==0 то стартер=0, таймер отдыха--
+					
+				if ( (timerOfStartEngine==0) & (timerOfStartEngineRest==0) )
+					{	
+						counterOfStarts--;
+						timerOfStartEngine=globalTimeOfStartEngine /*(10sek)*/; 
+						timerOfStartEngineRest=globalTimeOfStartEngineRest/*(30sek)*/;	
 					};				//если оба таймер_времени_завода==0 и таймер отдыха==0 то количество_попыток--,выставляем таймеры как из guarda/ таймер времени завода =10сек, таймер отдыха=30 сек,
-				if (counter_of_starts==0) 
-					{	/*SMS("can't start'");*/ OUT_eng_main_off; flag_autostart_allowed=0; state=1;
+					
+				if (counterOfStarts==0) 
+					{	/*SMS("can't start'");*/ 
+						dSendSms(dSmsCantStartEngine);
+						dSendCommand(dOutEngMainToOff);
+						//???dSendCommand(dOutEngAdditionalToOff);
+						flagAutostartAllowed=0; 
+						state=dStateGuard;
 					};//если кол-во_попыток==0, то отправить_смс"не могу завестись" , зажигание_оут=0, флаг разрешения завода=0(иначе по пределу температуры высадит весь акк) и возвращаемся в guard
-				if (IN_button_close==0) 
-					{	OUT_starter_off; OUT_eng_main_off; OUT_eng_additional_off; pick(2) ; OUT_door_to_open; timer_Open_But_Door = GLOBAL_timer_Open_But_Door; state=4;
+					
+				if (dIsButtonClose==0) 
+					{
+						dSendCommand(dOutStarterToOff);
+						dSendCommand(dOutEngMainToOff);
+						dSendCommand(dOutEngAdditionalToOff) ;
+						dPick(2) ;
+						dSendCommand(dOutDoorToOpen);	
+						timerOpenButDoor = globalTimerOpenButDoor;
+						state=dStateGuardButDoorOpen ;
 					}; // если кнопка=о ,то стартер=0, зажигание_оут=0 и зажигание_оут_доп=0,пикаем 2, двери на открытие, ждем 0,3 сек и прыгаем в состояние open_butDoor, таймер openButDoor=Хмин
-				if (IN_engine_work !=0) 
-					{	OUT_starter_off; OUT_eng_additional_on; timer_of_engine_work = GLOBAL_timer_of_engine_work; state = 7;
+					
+				if (dIsEngineWork !=0) 
+					{	
+						dSendCommand(dOutStarterToOff);
+						dSendCommand(dOutEngAdditionalToOn);
+						timerOfEngineWork = globalTimerOfEngineWork ; 
+						state = dStateAutostartWork;
 					};// если завод==1(по тахометру или напр.-обрабатывается в sensors) то стартер=0 , то ждем 5 сек, зажигание_оут_доп =1 , таймер_прогрева=Ч минут и переходим в состояние autostart_work 
 				break;
 			
 			case 7:// autostart_work. завелись и просто греемся
-				if (IN_button_close==0)
-					{	OUT_eng_main_off; OUT_eng_additional_off; pick(2); OUT_door_to_open; timer_Open_But_Door = GLOBAL_timer_Open_But_Door; state=4;
+				if (dIsButtonClose==0)
+					{	dSendCommand(dOutEngMainToOff); dSendCommand(dOutEngAdditionalToOff); dPick(2); dSendCommand(dOutDoorToOpen); timerOpenButDoor = globalTimerOpenButDoor; state=4;
 					};// если кнопка=о или дверь=0 ,то  зажигание_оут=0 и зажигание_оут_доп=0,пикаем 2, двери на открытие, ждем 0,3 сек и прыгаем в состояние open_butDoor, таймер openButDoor=Хмин
-				if (timer_of_engine_work>0) timer_of_engine_work-- ;// если таймер_прогрева>0 то таймер_прогрева--, 			
-				if ((timer_of_engine_work==0)|(IN_temperature>GLOBAL_in_temperature)) 
-					{	OUT_eng_main_off; OUT_eng_additional_off; pick(1); state = 1;
+					
+				if (timerOfEngineWork>0) timerOfEngineWork-- ;// если таймер_прогрева>0 то таймер_прогрева--, 			
+					
+				if ( (timerOfEngineWork==0) | (dInTemperature>globalInTemperature) ) 
+					{	
+						dSendCommand(dOutEngMainToOff);
+						dSendCommand(dOutEngAdditionalToOff); 
+						dPick(1); 
+						state = dStateGuard;
 					};// если таймер_прогрева==0 или температура движка дошла до целевой, то зажигание_оут=0 и зажигание_оут_доп=0,пикаем 1, и в состояние guard
 				break;	
       };// end swich
 		
-	if (IN_door_open!=0) flag_autostart_allowed=0; //если открыли дверь из любого режима, то флаг разрешения автозапуска=0
-	//to_sensor_module|=(state<<12);		// отправляем значение state для отладки
-	if (delay>0) osDelay(delay); delay=0;
-	
-	xQueueSend( toSensorsHandle, &to_sensor_module,portMAX_DELAY);// отправляем команды в задачу  sensors
-	to_sensor_module=0x8000; // после отсылки обнуляем команды . Тут только флаг, что команда пришла из main	
-	xQueueReceive( toMainHandle, &sensors,portMAX_DELAY);  				  //see queue for update sensors value			
+	if (dIsDoorOpen!=0) flagAutostartAllowed=0; //если открыли дверь из любого режима, то флаг разрешения автозапуска=0
 	
   }
  
@@ -569,69 +679,62 @@ void Task_Main(void const * argument)
 void Task_Sensors(void const * argument)
 {
   /* USER CODE BEGIN Task_Sensors */
-	uint32_t sensors_to_main = 0x00000000; // отправка значений ног в задачу main 
-	uint16_t commands = 0; // команды, полученные из main
-	uint8_t phisical_button, prev_phisical_button, logical_button;
-	portBASE_TYPE recieve_result;
+	uint32_t sensorsToMain = 0x00000000; // отправка значений ног в задачу main 
+	uint8_t commands = 0; // команды, полученные из main
+	uint8_t phisicalButton=0, prevPhisicalButton=0, logicalButton=0;
+	
   
   /* Infinite loop */
   for(;;)
   {	
-		recieve_result = xQueueReceive ( toSensorsHandle, &commands,0);
-		
-		sensors_to_main = 0x00000000;
-		phisical_button=HAL_GPIO_ReadPin( button_close_GPIO_Port, button_close_Pin);  // считываем значение на ноге во временную переменную
-		if (prev_phisical_button^phisical_button) logical_button=phisical_button;// если значение изменилось, то пишем ее значение в логическую
-		prev_phisical_button=phisical_button;// сохраняем для сравнения
-		if ((commands)&(0x0008)) logical_button=1;
-		if ((commands)&(0x0010)) logical_button=0;
+		sensorsToMain = 0x00000000;
+		phisicalButton=HAL_GPIO_ReadPin( button_close_GPIO_Port, button_close_Pin);  // считываем значение на ноге во временную переменную
+		if (prevPhisicalButton^phisicalButton) logicalButton=phisicalButton;// если значение изменилось, то пишем ее значение в логическую
+		prevPhisicalButton=phisicalButton;// сохраняем для сравнения
+		//if ((commands)&(0x0008)) logicalButton=1;
+		//if ((commands)&(0x0010)) logicalButton=0;
 		//сюда вставить код для обработки смс
-		if (logical_button) sensors_to_main+=0x80000000;// готов к отправке в main
-		
-		if (HAL_GPIO_ReadPin( door_open_GPIO_Port, door_open_Pin)) 							sensors_to_main+=0x40000000;// else sensors_to_main&=0xBFFFFFFF;	//устанавливаем или убираем бит кнопки
-		if (HAL_GPIO_ReadPin( engnition_GPIO_Port, engnition_Pin)) 							sensors_to_main+=0x20000000;// else sensors_to_main&=0xDFFFFFFF;	//устанавливаем или убираем бит кнопки
-		if (HAL_GPIO_ReadPin( headlamp_GPIO_Port, headlamp_Pin)) 								sensors_to_main+=0x10000000;// else sensors_to_main&=0xEFFFFFFF;	//устанавливаем или убираем бит кнопки
-		//if (HAL_GPIO_ReadPin( headlamp_GPIO_Port, headlamp_Pin)) 								sensors_to_main|=0x08000000; else sensors_to_main&=0xEFFFFFFF;	//flag autostart allowed - from sms
-		if (HAL_GPIO_ReadPin( handbrake_GPIO_Port, handbrake_Pin)) 							sensors_to_main+=0x04000000;// else sensors_to_main&=0xFBFFFFFF;	//устанавливаем или убираем бит кнопки
-		if (HAL_GPIO_ReadPin( engine_work_GPIO_Port, engine_work_Pin)) 					sensors_to_main+=0x02000000;// else sensors_to_main&=0xFDFFFFFF;	//устанавливаем или убираем бит кнопки
-		if (HAL_GPIO_ReadPin( shock_hi_GPIO_Port, shock_hi_Pin)) 								sensors_to_main+=0x01000000;// else sensors_to_main&=0xFEFFFFFF;	//устанавливаем или убираем бит кнопки
-		//if (HAL_GPIO_ReadPin( shock_hi_GPIO_Port, shock_hi_Pin)) 								sensors_to_main|=0x00800000;// else sensors_to_main&=0xFEFFFFFF;	//shock low
-		if (HAL_GPIO_ReadPin( begin_autostart_GPIO_Port, begin_autostart_Pin))  sensors_to_main+=0x00400000;// else sensors_to_main&=0xFFBFFFFF;	//устанавливаем или убираем бит кнопки
-		//if (HAL_GPIO_ReadPin( begin_autostart_GPIO_Port, begin_autostart_Pin))  sensors_to_main|=0x00400000;// else sensors_to_main&=0xFFBFFFFF;	//backdoor
-		// temperature
-		//не все кнопки тут
-		
-		
-		
-		if (commands&0x0001) HAL_GPIO_WritePin(door_GPIO_Port,door_Pin,1) ;
-	
-	
-		if (commands&0x0002) HAL_GPIO_WritePin(door_GPIO_Port,door_Pin,0) ;
-		
-		if (commands&0x0004) HAL_GPIO_TogglePin(glass_GPIO_Port,glass_Pin) ; //OUT_glass_to_close
-		
-	/*	if (commands&0x0008) HAL_GPIO_WritePin(door_GPIO_Port,door_open_Pin,1) ;//OUT_button_close
-		
-		if (commands&0x0010) HAL_GPIO_WritePin(door_GPIO_Port,door_open_Pin,1) ;//OUT_button_open
-	*/
-		if (commands&0x0020) HAL_GPIO_WritePin(eng_GPIO_Port,eng_Pin,1) ;//OUT_eng_main_on
-		
-		if (commands&0x0040) HAL_GPIO_WritePin(eng_GPIO_Port,eng_Pin,0) ;//OUT_eng_main_off
-	
-		if (commands&0x0080) HAL_GPIO_WritePin(eng_add_GPIO_Port,eng_add_Pin,1) ;//OUT_eng_additional_on
-	
-		if (commands&0x0100) HAL_GPIO_WritePin(eng_add_GPIO_Port,eng_add_Pin,0) ;//OUT_eng_additional_off
-		
-		if (commands&0x0200) HAL_GPIO_WritePin(starter_GPIO_Port,starter_Pin,1) ;//OUT_starter_on
-		
-		if (commands&0x0400) HAL_GPIO_WritePin(starter_GPIO_Port,starter_Pin,0) ;//OUT_starter_off
-		
-		
-		
-
+		if (logicalButton) sensorsToMain+=0x80000000;// готов к отправке в main
 			
+		if (HAL_GPIO_ReadPin( door_open_GPIO_Port, door_open_Pin)) 							sensorsToMain+=0x40000000;// else sensorsToMain&=0xBFFFFFFF;	//устанавливаем или убираем бит кнопки
+		if (HAL_GPIO_ReadPin( engnition_GPIO_Port, engnition_Pin)) 							sensorsToMain+=0x20000000;// else sensorsToMain&=0xDFFFFFFF;	//устанавливаем или убираем бит кнопки
+		if (HAL_GPIO_ReadPin( headlamp_GPIO_Port, headlamp_Pin)) 								sensorsToMain+=0x10000000;// else sensorsToMain&=0xEFFFFFFF;	//устанавливаем или убираем бит кнопки
+		if (HAL_GPIO_ReadPin( handbrake_GPIO_Port, handbrake_Pin)) 							sensorsToMain+=0x04000000;// else sensorsToMain&=0xFBFFFFFF;	//устанавливаем или убираем бит кнопки
+		if (HAL_GPIO_ReadPin( engine_work_GPIO_Port, engine_work_Pin)) 					sensorsToMain+=0x02000000;// else sensorsToMain&=0xFDFFFFFF;	//устанавливаем или убираем бит кнопки
+		if (HAL_GPIO_ReadPin( shock_hi_GPIO_Port, shock_hi_Pin)) 								sensorsToMain+=0x01000000;// else sensorsToMain&=0xFEFFFFFF;	//устанавливаем или убираем бит кнопки
+		if (HAL_GPIO_ReadPin( begin_autostart_GPIO_Port, begin_autostart_Pin))  sensorsToMain+=0x00400000;// else sensorsToMain&=0xFFBFFFFF;	//устанавливаем или убираем бит кнопки
 		
-		if (commands&0x8000) xQueueSend( toMainHandle, &sensors_to_main, portMAX_DELAY );
+			
+		xQueueReceive ( toSensorsHandle, &commands,0);
+		switch (commands)
+    {
+		 	case dOutDoorToClose:
+    		break;
+    	case	dOutDoorToOpen:
+    		break;
+			case	dOutGlassToClose:
+    		break;
+			case	dOutButtonToClose:	
+    		break;
+    	case	dOutButtonToOpen:
+    		break;
+    	case	dOutEngMainToOn:
+    		break;
+    	case	dOutEngMainToOff:
+    		break;
+    	case	dOutEngAdditionalToOn:
+    		break;
+    	case	dOutEngAdditionalToOff:
+    		break;
+    	case	dOutStarterToOn:
+    		break;
+    	case	dOutStarterToOff:
+    		break;
+    	case	dOutUpdateSensors:
+				xQueueSend( toMainHandle, &sensorsToMain, portMAX_DELAY );
+    		break;
+    };
+		
 		commands=0;
 		osDelay(1);
 		

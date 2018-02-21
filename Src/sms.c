@@ -33,7 +33,7 @@ uint8_t toNeoway(char* text, uint16_t delay_time)
 	char* ERROR="\r\nERROR\r\n";
 	char* sms_ready="\r\n> ";
 	
-	HAL_UART_Transmit_IT(&huart2, text, strlen(text));
+	HAL_UART_Transmit_IT(&huart2,(uint8_t *) text, strlen(text));
 
 	while (delay_time--) 
 	{
